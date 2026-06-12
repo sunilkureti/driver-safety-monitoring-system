@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Driver Safety Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #1a1a1a; color: white; }
+    #container { position: relative; display: inline-block; }
+    canvas { position: absolute; left: 0; top: 0; }
+    .status-box { margin-top: 20px; padding: 15px; border-radius: 10px; background: #333; display: inline-block; min-width: 300px; }
+    .alert-active { background: #ff4d4d !important; animation: blink 0.5s infinite; }
+    @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+  </style>
+</head>
+<body>
+
+  <h1>AI Driver Safety Monitor</h1>
+  <div id="container">
+    <video id="input_video" style="display:none"></video>
+    <canvas id="output_canvas" width="640" height="480"></canvas>
+  </div>
+
+  <div class="status-box" id="statusBox">
+    <h2 id="statusText">System Initializing...</h2>
+    <p id="earValue">Eye Aspect Ratio: 0.00</p>
+    <p id="marValue">Mouth Aspect Ratio: 0.00</p>
+  </div>
+
+  <audio id="alarmSound" src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" loop></audio>
+  <audio id="yawnSound" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg"></audio>
+
+  <script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const statusBox = document.getElementById('statusBox');
+    const statusText = document.getElementById('statusText');
+
+    // Thresholds
+    const EYE_THRESHOLD = 0.22; 
+    const MOUTH_THRESHOLD = 0.5;
+    const FRAME_CHECK = 15; // Number of frames eyes must be closed to trigger alarm
+    let counter = 0;
+
+    function getDistance(p1, p2) {
+      return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+    }
+
+    function onResults(results) {
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
+        const landmarks = results.multiFaceLandmarks[0];
+
+        // Eye Aspect Ratio (EAR) Points
+        // Using specific indices for MediaPipe FaceMesh
+        const leftEye = [landmarks[33], landmarks[160], landmarks[158], landmarks[133], landmarks[153], landmarks[144]];
+        const rightEye = [landmarks[362], landmarks[385], landmarks[387], landmarks[263], landmarks[373], landmarks[380]];
+
+        const ear = (calculateEAR(leftEye) + calculateEAR(rightEye)) / 2;
+        document.getElementById('earValue').innerText = `Eye Aspect Ratio: ${ear.toFixed(2)}`;
+
+        // Mouth Aspect Ratio (MAR)
+        const topLip = landmarks[13];
+        const bottomLip = landmarks[14];
+        const leftLip = landmarks[78];
+        const rightLip = landmarks[308];
+        const mar = getDistance(topLip, bottomLip) / getDistance(leftLip, rightLip);
+        document.getElementById('marValue').innerText = `Mouth Aspect Ratio: ${mar.toFixed(2)}`;
+
+        // DROWSINESS LOGIC
+        if (ear < EYE_THRESHOLD) {
+          counter++;
+          if (counter >= FRAME_CHECK) {
+            statusText.innerText = "DROWSINESS DETECTED!";
+            statusBox.classList.add('alert-active');
+            document.getElementById('alarmSound').play();
+          }
+        } else {
+          counter = 0;
+          statusText.innerText = "Driver Alert";
+          statusBox.classList.remove('alert-active');
+          document.getElementById('alarmSound').pause();
+        }
+
+        // YAWN LOGIC
+        if (mar > MOUTH_THRESHOLD) {
+          statusText.innerText = "YAWN DETECTED! Wash your face.";
+          document.getElementById('yawnSound').play();
+        }
+      }
+      canvasCtx.restore();
+    }
+
+    function calculateEAR(eye) {
+      const v1 = getDistance(eye[1], eye[5]);
+      const v2 = getDistance(eye[2], eye[4]);
+      const h = getDistance(eye[0], eye[3]);
+      return (v1 + v2) / (2.0 * h);
+    }
+
+    const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    faceMesh.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => { await faceMesh.send({image: videoElement}); },
+      width: 640, height: 480
+    });
+    camera.start();
+  </script>
+</body>
+</html>
